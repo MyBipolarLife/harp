@@ -1,97 +1,121 @@
 #!/usr/bin/env node
 
-var nodePath  = require('path')
-var program   = require('commander')
-var fse       = require("fs-extra")
-var pkg       = require('../package.json')
-var helpers   = require("../lib/helpers")
-var harp      = require('../')
+var nodePath      = require("path")
+var program       = require("commander")
+var fse           = require("fs-extra")
+var downloadRepo  = require("download-github-repo")
+var pkg           = require("../package.json")
+var helpers       = require("../lib/helpers")
+var harp          = require("../")
 
 var output = function(msg){
-  console.log("Harp v" + pkg.version)
-  console.log("Chloi Inc. 2012-2013")
+  var v = pkg.version
+  console.log("------------")
+  console.log("Harp v" + v + " – Chloi Inc. 2012–2015")
   if(msg){
-    console.log('')
     console.log(msg)
+    console.log("Press Ctl+C to stop the server")
   }
+  console.log("------------")
 }
 
 program
   .version(pkg.version)
 
 program
-  .command('init [path]')
-  .description('initialize new harp application in current directory')
+  .command("init [path]")
+  .usage("initializes a new Harp project in the current directory.\n  See available boilerplates at https://github.com/harp-boilerplates")
+  .option("-b, --boilerplate <github-username/repo>", "use a github repo as a boilerplate", "harp-boilerplates/default")
+  .description("Initialize a new Harp project in current directory")
   .action(function(path, program){
     var projectPath     = nodePath.resolve(process.cwd(), path || "")
-    var boilerplatePath = nodePath.resolve(__dirname, "..", "lib", "sample")
+    var boilerplatePath = nodePath.resolve(__dirname, "..", "lib", "default_boilerplate")
+    var repo            = program.boilerplate
 
-    var done = function(err){
-      console.log('initialized project at', projectPath)
+    // Assume `harp-boilerplates` github org if boilerplate doesn't contain a slash
+    repo.match(/\//) || (repo = "harp-boilerplates/"+repo)
+
+    var done = function() {
+      console.log("Initialized project at", projectPath)
     }
 
     fse.mkdirp(projectPath, function(err){
       if(err) return err
 
       fse.readdir(projectPath, function(err, contents){
+
         if(err) return err
-        if(contents.length == 0){
-          fse.readdir(boilerplatePath, function(err, contents){
-            if(err) return err
-            var total = contents.length
-            var count = 0
-            contents.forEach(function(i){
-              var fromPath = nodePath.resolve(boilerplatePath, i)
-              var toPath   = nodePath.resolve(projectPath, i)
-              fse.copy(fromPath, toPath, function(err){
-                count++
-                if(count == total) done()
-              })
-            })
-          })
-        }else{
-          console.log("Sorry,", projectPath, " must be empty.")
+
+        if(contents.length !== 0){
+          console.log("Sorry,", projectPath, "must be empty.")
+          return
         }
-        var count = 0
+
+        console.log("Downloading boilerplate: https://github.com/"+repo)
+
+        //fse.writeFileSync("/Desktop/harp-test-output.txt", repo + "::" + projectPath)
+
+        downloadRepo(repo, projectPath, function(err) {
+          if (!err) return done()
+
+          if (require('util').isError(err) && err['code'] === 'ENOTFOUND') {
+            console.error("You're not connected to the Internet, so we'll use the default boilerplate.")
+            fse.copy(boilerplatePath, projectPath, function(err){
+              if (err) return err
+              return done()
+            })
+          } else {
+            return console.error("Template not found:", "https://github.com/"+repo)
+          }
+
+        })
 
       })
     })
-
   })
 
 program
-  .command('server [path]')
-  .option('-p, --port <port>', 'specify port to listen on')
-  .description('start harp server')
+  .command("server [path]")
+  .option("-i, --ip <ip>", "Specify IP to bind to")
+  .option("-p, --port <port>", "Specify a port to listen on")
+  .usage("starts a Harp server in current directory, or in the specified directory.")
+  .description("Start a Harp server in current directory")
   .action(function(path, program){
     var projectPath = nodePath.resolve(process.cwd(), path || "")
-    var port        = program.port || 9000
-    harp.server(projectPath, { port: port }, function(){
-      output("Your server is listening at http://localhost:" + port + "/")
+    if(typeof program.ip   == 'undefined') program.ip   = '0.0.0.0'
+    if(typeof program.port == 'undefined') program.port = 9000
+    harp.server(projectPath, { ip: program.ip, port: program.port }, function(){
+      var host = this.address()
+      if(host.address == '0.0.0.0' || host.address == '127.0.0.1') host.address = 'localhost'
+      var hostUrl = "http://" + host.address + ":" + host.port + "/"
+      output("Your server is listening at " + hostUrl)
     })
   })
 
 program
-  .command('multihost [path]')
-  .option('-p, --port <port>', 'specify port to listen on')
-  .description('start harp server to host directory of harp apps')
+  .command("multihost [path]")
+  .option("-p, --port <port>", "Specify a port to listen on")
+  .usage("starts a Harp server to host a directory of Harp projects.")
+  .description("Start a Harp server to host a directory of Harp projects")
   .action(function(path, program){
     var projectPath = nodePath.resolve(process.cwd(), path || "")
-    var port        = program.port || 9000
-    harp.multihost(projectPath, { port: port }, function(){
-      if(port == "80"){
+    if(typeof program.port == 'undefined') program.port = 9000
+    harp.multihost(projectPath, { port: program.port }, function(){
+      var host = this.address()
+      if(host.port == "80"){
         var loc = "http://harp.nu"
       }else{
-        var loc = "http://harp.nu:" + port
+        var loc = "http://harp.nu:" + host.port
       }
       output("Your server is hosting multiple projects at " + loc)
     })
   })
 
 program
-  .command('compile [projectPath] [outputPath]')
-  .option('-o, --output <path>', 'specify output directory for compiled assets (relative to project path)')
-  .description('compile project to static assets')
+  .command("compile [projectPath] [outputPath]")
+  .option("-o, --output <path>", "Specify the output directory for compiled assets (relative to project path)")
+  .usage("compile your project files to static assets (HTML, JS and CSS). \n  Use this command if you want to host your application without using the Harp web server.")
+  .description("Compile project to static assets (HTML, JS and CSS)")
   .action(function(projectPath, outputPath, program){
 
     if(!program){
@@ -117,11 +141,18 @@ program
     }
 
     harp.compile(projectPath, outputPath, function(errors, output){
-      if(errors) console.log(JSON.stringify(errors, null, 2))
+      if(errors) {
+        console.log(JSON.stringify(errors, null, 2))
+        process.exit(1)
+      }
     })
   })
 
-program.command("*").action(program.help)
+program.on("--help", function(){
+  console.log("  Use 'harp <command> --help' to get more information or visit http://harpjs.com/ to learn more.")
+  console.log('')
+})
+
 program.parse(process.argv)
 
 if(program.args.length < 1){
